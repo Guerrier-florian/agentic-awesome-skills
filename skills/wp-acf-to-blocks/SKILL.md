@@ -23,7 +23,7 @@ tags:
 
 ## Operational boundaries
 
-Keep the scope, sandbox, credentials, and approval settings supplied by the user or host. This skill operates strictly on local theme templates and configuration files; the bundled AST scanner is read-only, has zero external dependencies, makes no network requests, and performs no filesystem writes. Maintain existing WordPress database integrity by never modifying production database records during scanning or on front-end requests.
+Keep the scope, sandbox, credentials, and approval settings supplied by the user or host. This skill operates strictly on local theme templates and configuration files; the bundled `scan-acf.mjs` script is a read-only **heuristic inventory aid** (tokenizing PHP files without building a full AST), has zero external dependencies, makes no network requests, and performs no filesystem writes. Maintain existing WordPress database integrity by never modifying production database records during scanning or on front-end requests.
 
 ## When to Use
 
@@ -43,7 +43,7 @@ From the repository root or skill directory, run:
 node skills/wp-acf-to-blocks/scripts/scan-acf.mjs <theme-dir>
 ```
 
-Append `--json` for call sites and field counts. In an installed skill, resolve `scripts/scan-acf.mjs` relative to this file. Match selectors and line numbers to ACF field definitions in PHP, Local JSON or an export. Inspect dynamic selectors, wrappers, included template parts and explicit post IDs. Confirm the raw values and hidden field-key references on representative posts. Options, terms, users and existing ACF blocks can store data outside post meta.
+Append `--json` for call sites and field counts. `scan-acf.mjs` is a **heuristic inventory aid** (it tokenizes PHP files and tracks `use function` imports without building a full AST or executing PHP). In an installed skill, resolve `scripts/scan-acf.mjs` relative to this file. Match selectors and line numbers to ACF field definitions in PHP, Local JSON or an export. Inspect dynamic selectors, wrappers, included template parts and explicit post IDs. Confirm the raw values and hidden field-key references on representative posts. Options, terms, users and existing ACF blocks can store data outside post meta.
 
 ## 2. Choose a strategy per component
 

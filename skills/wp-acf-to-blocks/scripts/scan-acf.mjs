@@ -62,19 +62,100 @@ function fieldName(tokens, index) {
   return null;
 }
 
+function parseUseFunction(tokens, start) {
+  let i = start;
+  let depth = 0;
+  let prefix = '';
+  const entries = [];
+  let parts = [];
+  let alias = null;
+  let readingAlias = false;
+
+  function flush() {
+    const raw = parts.join('').replace(/^\\/, '');
+    if (raw) {
+      const fqn = prefix ? `${prefix}${raw}` : raw;
+      const local = (alias ?? fqn.split('\\').pop()).toLowerCase();
+      entries.push({ fqn, local });
+    }
+    parts = [];
+    alias = null;
+    readingAlias = false;
+  }
+
+  while (i < tokens.length) {
+    const val = tokens[i].value;
+    if (val === ';') {
+      flush();
+      return { entries, nextIndex: i };
+    }
+    if (val === '{') {
+      prefix = parts.join('').replace(/^\\/, '');
+      if (prefix && !prefix.endsWith('\\')) prefix += '\\';
+      parts = [];
+      depth++;
+    } else if (val === '}') {
+      flush();
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) prefix = '';
+    } else if (val === ',') {
+      flush();
+    } else if (val.toLowerCase() === 'as') {
+      readingAlias = true;
+    } else if (readingAlias) {
+      alias = val;
+    } else {
+      parts.push(val);
+    }
+    i++;
+  }
+  return { entries, nextIndex: i };
+}
+
 function inspectFile(file, base) {
   const tokens = tokenize(fs.readFileSync(file, 'utf8'));
   const calls = [];
   const fields = new Map();
+  const shadowed = new Set();
+  let inNamespace = false;
+  let braceDepth = 0;
+
   for (let i = 0; i < tokens.length; i++) {
     const { value, line } = tokens[i];
+    const lower = value.toLowerCase();
+    const prev = tokens[i - 1]?.value.toLowerCase();
+
+    if (value === '{') braceDepth++;
+    else if (value === '}') braceDepth = Math.max(0, braceDepth - 1);
+
+    if (lower === 'namespace' && !['->', '?->', '::', '$', 'function', 'use'].includes(prev) && tokens[i + 1]?.value !== '\\') {
+      shadowed.clear();
+      inNamespace = tokens[i + 1]?.value !== '{';
+      continue;
+    }
+    if (lower === 'use' && tokens[i + 1]?.value.toLowerCase() === 'function' && !['->', '?->', '::', '$', 'function'].includes(prev)) {
+      const { entries, nextIndex } = parseUseFunction(tokens, i + 2);
+      for (const { fqn, local } of entries) {
+        if (!functions.has(local)) continue;
+        if (fqn.includes('\\')) shadowed.add(local);
+        else shadowed.delete(local);
+      }
+      i = nextIndex;
+      continue;
+    }
+    if (inNamespace && lower === 'function' && tokens[i + 2]?.value === '(') {
+      const declared = tokens[i + 1]?.value.toLowerCase();
+      if (functions.has(declared)) shadowed.add(declared);
+    }
+
+    const isGlobalQualified = value.startsWith('\\');
     const name = value.replace(/^\\/, '').toLowerCase();
     if (!functions.has(name) || tokens[i + 1]?.value !== '(') continue;
-    const prev = tokens[i - 1]?.value.toLowerCase();
     const before = tokens[i - 2]?.value.toLowerCase();
     if (['->', '?->', '::', '$', 'function', 'new'].includes(prev)) continue;
     if (prev === '&' && before === 'function') continue;
     if (tokens[i + 2]?.value === '...' && tokens[i + 3]?.value === ')') continue;
+    if (!isGlobalQualified && shadowed.has(name)) continue;
     const field = fieldReaders.has(name) ? fieldName(tokens, i + 2) : null;
     calls.push({ function: name, field, line });
     if (field !== null) fields.set(field, (fields.get(field) ?? 0) + 1);

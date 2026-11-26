@@ -85,6 +85,8 @@ function scanFile(file, display) {
   const tokens = /<!--[\s\S]*?(?:-->|$)|\{\/\*[\s\S]*?\*\/\}|<(\/?)([a-z][\w.:-]*)(?=[\s/>])/gi;
   const stack = [];
   const findings = [];
+  const labelFors = new Set();
+  const inputsToCheck = [];
   let cursor = 0;
   let match;
   function report(offset, code, message) {
@@ -119,6 +121,10 @@ function scanFile(file, display) {
     const src = urlOf(attrs.get('src'));
     const href = urlOf(attrs.get('href'));
     const runnable = !inertType.test(attrs.get('type') ?? '');
+    if (tag === 'label') {
+      const target = (attrs.get('for') ?? attrs.get('htmlfor') ?? '').trim();
+      if (target) labelFors.add(target);
+    }
     if (tag === 'script' && runnable && src && tracker.test(src.hostname)) {
       report(offset, 'GDPR-BLOCKER', 'Gate the tracking script before it can load.');
     }
@@ -130,9 +136,15 @@ function scanFile(file, display) {
       report(offset, 'GDPR-HIGH', 'Self-host the font stylesheet and font files.');
     }
     if (tag === 'img' && !attrs.has('alt')) report(offset, 'EAA-BLOCKER', 'Add an alt attribute to <img>.');
-    if (tag === 'input' && attrs.get('type')?.toLowerCase() !== 'hidden' &&
-        !['id', 'aria-label', 'aria-labelledby'].some(key => attrs.get(key))) {
-      report(offset, 'EAA-BLOCKER', 'Associate the input with a label.');
+    if (tag === 'input') {
+      const inputType = attrs.get('type')?.toLowerCase() ?? 'text';
+      const isButtonInput = ['submit', 'button', 'reset'].includes(inputType) && Boolean(attrs.get('value')?.trim());
+      const isImageInput = inputType === 'image' && Boolean(attrs.get('alt')?.trim());
+      const wrappedByLabel = stack.some(node => node.tag === 'label');
+      const hasAccessibleAttr = nameKeys.some(key => Boolean(attrs.get(key)?.trim()));
+      if (inputType !== 'hidden' && !isButtonInput && !isImageInput && !wrappedByLabel && !hasAccessibleAttr) {
+        inputsToCheck.push({ offset, id: (attrs.get('id') ?? '').trim() });
+      }
     }
     if (['div', 'span'].includes(tag) && ['onclick', '@click', 'v-on:click'].some(key => attrs.has(key)) &&
         !attrs.get('role') && !attrs.has('tabindex')) {
@@ -158,6 +170,11 @@ function scanFile(file, display) {
     }
   }
   while (stack.length) close();
+  for (const { offset, id } of inputsToCheck) {
+    if (!id || !labelFors.has(id)) {
+      report(offset, 'EAA-BLOCKER', 'Associate the input with a label.');
+    }
+  }
   scanned++;
   if (!findings.length) clean++;
   let line = 1;
@@ -184,8 +201,8 @@ try {
   if (process.argv.length > 3) throw new Error('Usage: node audit-compliance.mjs [target-dir]');
   const root = path.resolve(process.argv[2] ?? '.');
   walk(root, root);
-  const score = scanned ? `${Math.round(100 * clean / scanned)}% (${clean}/${scanned} files without findings)` : 'N/A (no supported files)';
-  console.log(`Scanned: ${scanned} | Blocker: ${counts.BLOCKER} | High: ${counts.HIGH} | Medium: ${counts.MEDIUM}\nStatic score: ${score}`);
+  const cleanRate = scanned ? `${Math.round(100 * clean / scanned)}% (${clean}/${scanned} files without heuristic static findings; not a compliance or runtime pass)` : 'N/A (no supported files)';
+  console.log(`Scanned: ${scanned} | Blocker: ${counts.BLOCKER} | High: ${counts.HIGH} | Medium: ${counts.MEDIUM}\nClean-file rate: ${cleanRate}`);
   process.exitCode = counts.BLOCKER ? 1 : 0;
 } catch (error) {
   console.error(`Audit incomplete: ${error.message}`);
